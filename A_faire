@@ -1,0 +1,31 @@
+root_rank = 0 (le processus pere)
+
+Dans dict_stup
+
+faire un dictionnaire vide de taille 2*size/(n-1)
+l'envoyer à chaque processus sauf root_rank
+
+dans golden_claw_search
+
+pour chaque x:
+	calculer z = f(x)
+	calculer shard = z%(n-1)
+	send z et x au processus shard
+	if(rank == shard)
+		recv z et de processus root_rank
+		insérer key = z, value = x dans le dictionnaire
+
+pour chaque y:
+	calculer w = g(y)
+	calculer shard = w%(n-1)
+	send w et y au processus shard
+	if(rank == shard)
+		recv w et y du processus root_rank
+		vérifier si w appartient au dictionnaire
+		si oui verifier si pi(x,y) = 1
+			si oui send mettre x et y dans un tableau réponse
+				incrémenter le nombre de réponse ATTENTION, IL PEUT Y AVOIR DES PROBLEME ICI
+				send le tableau réponse (ou NULL si il n'y en a pas)
+	if(rank == root_rank)
+	recv le tableau de réponse
+
