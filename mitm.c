@@ -8,7 +8,7 @@
 #include <err.h>
 #include <assert.h>
 
-#include <mpi.h>
+// #include <mpi.h>
 
 typedef uint64_t u64;       /* portable 64-bit integer */
 typedef uint32_t u32;       /* portable 32-bit integer */
@@ -218,7 +218,6 @@ bool is_good_pair(u64 k1, u64 k2)
 /* search the "golden collision" */
 int golden_claw_search(int maxres, u64 k1[], u64 k2[])
 {
-    MPI.
     double start = wtime();
     u64 N = 1ull << n;
     for (u64 x = 0; x < N; x++) {

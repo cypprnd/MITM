@@ -10,6 +10,7 @@
 
 #include <mpi.h>
 
+
 typedef uint64_t u64;       /* portable 64-bit integer */
 typedef uint32_t u32;       /* portable 32-bit integer */
 struct __attribute__ ((packed)) entry { u32 k; u64 v; };  /* hash table entry */
@@ -25,6 +26,9 @@ struct entry *A;   /* the hash table */
 /* (P, C) : two plaintext-ciphertext pairs */
 u32 P[2][2] = {{0, 0}, {0xffffffff, 0xffffffff}};
 u32 C[2][2];
+
+int rank, C_size;
+MPI_Status status;
 
 /************************ tools and utility functions *************************/
 
@@ -119,7 +123,8 @@ static const u64 PRIME = 0xfffffffb;
 /* allocate a hash table with `size` slots (12*size bytes) */
 void dict_setup(u64 size)
 {
-	dict_size = 2*size/(C_size-1) // size
+	// dict_size = 2*size/(C_size-1); // size
+    dict_size = size;
 	char hdsize[8];
 	human_format(dict_size * sizeof(*A), hdsize);
 	printf("Dictionary size: %sB\n", hdsize);
@@ -130,6 +135,7 @@ void dict_setup(u64 size)
 	for (u64 i = 0; i < dict_size; i++)
 		A[i].k = EMPTY;
 
+    /*
     // envoyer le tableau à chaque processus ou l'initialiser dans chaque processus (sendi pour passer à autre chose)
     // on peut faire une boucle for 
     for(u64 i = 1; i < C_size; i++){
@@ -139,7 +145,7 @@ void dict_setup(u64 size)
         if(rank == i){
             MPI_recvi(&A, dict_size, MPI_UINT64T, root_rank, 0, MPI_COMM_WORLD, &status); // recevoir du tableau de taille 2*size/(C_size-1) = dict_size au processus root_rank = 0
         }
-    }
+    }*/
 }
 
 /* Insert the binding key |----> value in the dictionnary */
@@ -227,7 +233,7 @@ bool is_good_pair(u64 k1, u64 k2)
 /******************************************************************************/
 
 /* search the "golden collision" */
-int golden_claw_search(int maxres, u64 k1[], u64 k2[])
+/*int golden_claw_search(int maxres, u64 k1[], u64 k2[])
 {
     double start = wtime();
     u64 shard = 0;
@@ -237,13 +243,13 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[])
         u64 z = f(x);
         shard = z%(C_size-1) + 1;
 
-        MPI_sendi(&z, 1, MPI_UINT64T, shard, 1, MPI_COMM_WORLD);
-        MPI_sendi(&x, 1, MPI_UINT64T, shard, 2, MPI_COMM_WORLD);
+        MPI_sendi(&z, 1, MPI_UINT64_T, shard, 1, MPI_COMM_WORLD);
+        MPI_sendi(&x, 1, MPI_UINT64_T, shard, 2, MPI_COMM_WORLD);
 
         if(rank == shard){
 
-            MPI_recvi(z, dict_size, MPI_UINT64T, root_rank, 1, MPI_COMM_WORLD, &status);
-            MPI_recvi(x, dict_size, MPI_UINT64T, root_rank, 2, MPI_COMM_WORLD, &status); 
+            MPI_recvi(z, dict_size, MPI_UINT64_T, root_rank, 1, MPI_COMM_WORLD, &status);
+            MPI_recvi(x, dict_size, MPI_UINT64_T, root_rank, 2, MPI_COMM_WORLD, &status); 
             
             dict_insert(z, x);
         }
@@ -261,13 +267,13 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[])
         u64 y = g(z);
         shard = y%(C_size-1);
 
-        MPI_sendi(&y, 1, MPI_UINT64T, shard, 3, MPI_COMM_WORLD);
-        MPI_sendi(&z, 1, MPI_UINT64T, shard, 4, MPI_COMM_WORLD);
+        MPI_sendi(&y, 1, MPI_UINT64_T, shard, 3, MPI_COMM_WORLD);
+        MPI_sendi(&z, 1, MPI_UINT64_T, shard, 4, MPI_COMM_WORLD);
 
         if(rank == shard){
 
-            MPI_recvi(y, dict_size, MPI_UINT64T, root_rank, 3, MPI_COMM_WORLD, &status);
-            MPI_recvi(z, dict_size, MPI_UINT64T, root_rank, 4, MPI_COMM_WORLD, &status); 
+            MPI_recvi(y, dict_size, MPI_UINT64_T, root_rank, 3, MPI_COMM_WORLD, &status);
+            MPI_recvi(z, dict_size, MPI_UINT64_T, root_rank, 4, MPI_COMM_WORLD, &status); 
 
             int nx = dict_probe(y, 256, x);
             assert(nx >= 0);
@@ -282,8 +288,9 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[])
                     nres += 1;
                 }
             }
-            // il faut récupérer tous les k1 et les k2 dans le processus mere
+            
         }
+        // il faut récupérer tous les k1 et les k2 dans le processus mere
         if(rank == root_rank){
             // MPI_reduce ou quelque chose comme ça
             // récupérer le nres de chaque processus, faire la somme 
@@ -292,7 +299,351 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[])
     }
     printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
     return nres;
+}*/
+
+int root_rank = 0;
+/*
+int golden_claw_search(int maxres, u64 k1[], u64 k2[])
+{
+    double start = wtime();
+    u64 shard = 0;
+    u64 N = 1ull << n;
+
+    u64 send_data[C_size * 2];
+    u64 recv_data[C_size * 2];
+
+    int root_rank = 0;
+
+    printf("%d", N);
+
+    for (u64 x = 0; x < N; x++) {
+        u64 z = f(x);
+        shard = z % (C_size - 1) + 1;
+
+        // Préparer les données à envoyer avec MPI_Alltoall
+        send_data[rank * 2] = z;
+        send_data[rank * 2 + 1] = x;
+
+        MPI_Alltoall(send_data, 2, MPI_UINT64_T, recv_data, 2, MPI_UINT64_T, MPI_COMM_WORLD);
+
+        for (int i = 0; i < C_size; i++) {
+            u64 recv_z = recv_data[i * 2];
+            u64 recv_x = recv_data[i * 2 + 1];
+            
+            if (rank == shard) {
+                dict_insert(recv_z, recv_x);
+            }
+        }
+        printf("%d",x);
+    }
+    printf("ici");
+    double mid = wtime();
+    printf("Fill: %.1fs\n", mid - start);
+
+    int nres = 0;
+    u64 ncandidates = 0;
+    u64 x[256];
+    u64 local_k1[256], local_k2[256];
+    int local_nres = 0;
+
+    for (u64 z = 0; z < N; z++) {
+        u64 y = g(z);
+        shard = y % (C_size - 1);
+
+        // Préparer les données à envoyer avec MPI_Alltoall
+        send_data[rank * 2] = y;
+        send_data[rank * 2 + 1] = z;
+
+        MPI_Alltoall(send_data, 2, MPI_UINT64_T, recv_data, 2, MPI_UINT64_T, MPI_COMM_WORLD);
+
+        for (int i = 0; i < C_size; i++) {
+            u64 recv_y = recv_data[i * 2];
+            u64 recv_z = recv_data[i * 2 + 1];
+
+            if (rank == shard) {
+                int nx = dict_probe(recv_y, 256, x);
+                assert(nx >= 0);
+                ncandidates += nx;
+
+                for (int j = 0; j < nx; j++) {
+                    if (is_good_pair(x[j], recv_z)) {
+                        if (local_nres == 256) {
+                            printf("Local buffer overflow!\n");
+                            return -1;
+                        }
+                        local_k1[local_nres] = x[j];
+                        local_k2[local_nres] = recv_z;
+                        local_nres++;
+                    }
+                }
+            }
+        }
+    }
+
+    // Utilisation de MPI_Reduce pour collecter les nres totaux
+    int total_nres = 0;
+    MPI_Reduce(&local_nres, &total_nres, 1, MPI_INT, MPI_SUM, root_rank, MPI_COMM_WORLD);
+
+    if (rank == root_rank) {
+        if (total_nres > maxres) {
+            printf("Exceeded maxres, terminating search.\n");
+            return -1;
+        }
+
+        // Collecte des résultats locaux dans le processus maître
+        int offset = 0;
+        for (int i = 0; i < local_nres; i++) {
+            k1[offset + i] = local_k1[i];
+            k2[offset + i] = local_k2[i];
+        }
+        offset += local_nres;
+
+        // Recevoir les résultats des autres processus
+        for (int proc = 1; proc < C_size; proc++) {
+            int proc_nres;
+            MPI_Recv(&proc_nres, 1, MPI_INT, proc, 6, MPI_COMM_WORLD, &status);
+
+            u64 recv_k1[256], recv_k2[256];
+            MPI_Recv(recv_k1, proc_nres, MPI_UINT64_T, proc, 7, MPI_COMM_WORLD, &status);
+            MPI_Recv(recv_k2, proc_nres, MPI_UINT64_T, proc, 8, MPI_COMM_WORLD, &status);
+
+            for (int i = 0; i < proc_nres; i++) {
+                k1[offset + i] = recv_k1[i];
+                k2[offset + i] = recv_k2[i];
+            }
+            offset += proc_nres;
+        }
+    } else {
+        // Envoyer les résultats locaux au processus maître
+        MPI_Send(&local_nres, 1, MPI_INT, root_rank, 6, MPI_COMM_WORLD);
+        MPI_Send(local_k1, local_nres, MPI_UINT64_T, root_rank, 7, MPI_COMM_WORLD);
+        MPI_Send(local_k2, local_nres, MPI_UINT64_T, root_rank, 8, MPI_COMM_WORLD);
+    }
+
+    printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+    return total_nres;
 }
+*/ // Programme avec alltoall qui ne fonctionne pas
+/*
+int golden_claw_search(int maxres, u64 k1[], u64 k2[])
+{
+    double start = wtime();
+    u64 shard = 0;
+    u64 N = 1ull << n;
+
+    for (u64 x = 0; x < N; x++) {
+        u64 z = f(x);
+        shard = z % (C_size - 1) + 1;
+        // printf("%d", shard);
+
+        MPI_Send(&z, 1, MPI_UINT64_T, shard, 1, MPI_COMM_WORLD);
+        MPI_Send(&x, 1, MPI_UINT64_T, shard, 2, MPI_COMM_WORLD);
+
+        if (rank == shard) {
+            MPI_Recv(&z, dict_size, MPI_UINT64_T, root_rank, 1, MPI_COMM_WORLD, &status);
+            MPI_Recv(&x, dict_size, MPI_UINT64_T, root_rank, 2, MPI_COMM_WORLD, &status);
+
+            dict_insert(z, x);
+        }
+    }
+
+    double mid = wtime();
+    printf("Fill: %.1fs\n", mid - start);
+
+    int nres = 0;
+    u64 ncandidates = 0;
+    u64 x[256];
+    for (u64 z = 0; z < N; z++) {
+
+        u64 y = g(z);
+        shard = y % (C_size - 1) + 1;
+
+        // MPI_Send(&y, 1, MPI_UINT64_T, shard, 3, MPI_COMM_WORLD);
+        // MPI_Send(&z, 1, MPI_UINT64_T, shard, 4, MPI_COMM_WORLD);
+
+        printf("On cast les val : %d \n", rank);
+
+        MPI_Bcast(&y, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+        MPI_Bcast(&z, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+        MPI_Bcast(&x, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+
+        if (rank == shard) {
+
+            // MPI_Recv(&y, dict_size, MPI_UINT64_T, root_rank, 3, MPI_COMM_WORLD, &status);
+            // MPI_Recv(&z, dict_size, MPI_UINT64_T, root_rank, 4, MPI_COMM_WORLD, &status);
+
+            printf("on se place dans le bon processus \n");
+
+            int nx = dict_probe(y, 256, x);
+            
+            printf("le nb: %d ",nx);
+            assert(nx >= 0);
+            ncandidates += nx;
+            printf("ca commence ");
+            for (int i = 0; i < nx; i++) {
+                // printf("ici ");
+                if (is_good_pair(x[i], z)) {
+                    printf("ici1");
+                    if (nres == maxres)
+                        return -1;
+                    k1[nres] = x[i];
+                    k2[nres] = z;
+                    printf("SOLUTION FOUND!\n");
+                    nres += 1;
+                }
+            }
+            printf("il faut recommencer \n");
+        }
+
+        // Collect all k1, k2, and nres in the root process
+        u64 global_k1[maxres * C_size];
+        u64 global_k2[maxres * C_size];
+        int global_nres;
+
+        MPI_Gather(k1, nres, MPI_UINT64_T, global_k1, maxres, MPI_UINT64_T, root_rank, MPI_COMM_WORLD);
+        MPI_Gather(k2, nres, MPI_UINT64_T, global_k2, maxres, MPI_UINT64_T, root_rank, MPI_COMM_WORLD);
+        MPI_Reduce(&nres, &global_nres, 1, MPI_INT, MPI_SUM, root_rank, MPI_COMM_WORLD);
+
+        if (rank == root_rank) {
+            // Check if total results exceed maxres
+            if (global_nres > maxres) {
+                printf("Max results exceeded!\n");
+                return -1;
+            }
+
+            // Consolidate k1 and k2
+            for (int i = 0; i < global_nres; i++) {
+                k1[i] = global_k1[i];
+                k2[i] = global_k2[i];
+            }
+        }
+    }
+
+    printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+
+    int total_nres;
+    MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, root_rank, MPI_COMM_WORLD);
+
+    return total_nres;
+} */
+
+int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
+    double start = wtime();
+    u64 shard = 0;
+    u64 N = 1ull << n;
+
+    // Allocation des résultats globaux
+    u64 *global_k1 = NULL;
+    u64 *global_k2 = NULL;
+    if (rank == root_rank) {
+        global_k1 = malloc(maxres * C_size * sizeof(u64));
+        global_k2 = malloc(maxres * C_size * sizeof(u64));
+    }
+
+    // Première phase : insertion dans le dictionnaire distribué
+    for (u64 x = 0; x < N; x++) {
+        u64 z = f(x);
+        shard = z % C_size;  // Répartition entre les processus
+
+        // Broadcast des données
+        MPI_Bcast(&z, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+        MPI_Bcast(&x, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+
+        // Chaque processus insère si shard == rank
+        if (rank == shard) {
+            dict_insert(z, x);
+        }
+    }
+
+    double mid = wtime();
+    printf("Fill: %.1fs\n", mid - start);
+
+    // Deuxième phase : recherche des correspondances
+    int nres = 0;
+    u64 ncandidates = 0;
+    u64 x[256];
+
+    for (u64 z = 0; z < N; z++) {
+        u64 y = g(z);
+        shard = y % C_size;
+
+        // printf("envoie des données: y = %d, z = %d (rank = %d)\n", y, z, rank);
+
+        // Broadcast des données
+        MPI_Bcast(&y, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+        MPI_Bcast(&z, 1, MPI_UINT64_T, shard, MPI_COMM_WORLD);
+
+        if (rank == shard) {
+            // printf("je suis dans le shard : %d \n", shard);
+
+            int nx = dict_probe(y, 256, x);
+            // printf("on a %d candidats à tester \n", nx);
+
+            assert(nx >= 0);
+            ncandidates += nx;
+
+            for (int i = 0; i < nx; i++) {
+                if (is_good_pair(x[i], z)) {
+                    if (nres == maxres) {
+                        free(global_k1);
+                        free(global_k2);
+                        return -1;  // Trop de résultats
+                    }
+                    k1[nres] = x[i];
+                    k2[nres] = z;
+                    printf("SOLUTION FOUND!\n");
+                    nres++;
+                }
+            }
+            // printf("on a fini les tests, il faut recommencer \n");
+        }
+    }
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    printf("on collecte les resultats \n");
+
+    // Collecte des résultats
+    MPI_Gather(k1, 16, MPI_UINT64_T, global_k1, maxres, MPI_UINT64_T, root_rank, MPI_COMM_WORLD);
+    MPI_Gather(k2, 16, MPI_UINT64_T, global_k2, maxres, MPI_UINT64_T, root_rank, MPI_COMM_WORLD);
+
+    printf("on reduit les resultats \n");
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Réduction pour calculer le nombre total de solutions
+    int total_nres;
+    MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, root_rank, MPI_COMM_WORLD);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    printf("nombre de paires trouvé : %d \n", total_nres);
+
+    printf("on passe à l'étape suivante \n");
+
+    if (rank == root_rank) {
+        // Vérifiez si le total dépasse le maximum autorisé
+        if (total_nres > maxres) {
+            printf("Max results exceeded!\n");
+            return -1;
+        }
+
+        // Consolidation des résultats globaux
+        for (int i = 0; i < total_nres; i++) {
+            k1[i] = global_k1[i];
+            k2[i] = global_k2[i];
+        }
+    }
+
+    printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+
+    // total_nres = 1;
+    if(rank == root_rank) return total_nres;
+}
+
+
+
+
 
 /************************** command-line options ****************************/
 
@@ -348,33 +699,46 @@ void process_command_line_options(int argc, char ** argv)
 
 /******************************************************************************/
 
-/*
- * Liste des tags
- * tag = 0 => Envoie du dictionnaire vide dans chaque processus
- * tag = 1 => Envoie de x au processus n°shard
- * tag = 2 => Envoie de z au processus n°shard
- * tag = 3 => Envoie de y au processus n°shard
- * tag = 4 => Envoie de w au processis n°shard
- * tag = 5 =>
- */
+// MPI_Alltoall
+/**
+ * +-----------------------+ +-----------------------+ +-----------------------+
+ * |       Process 0       | |       Process 1       | |       Process 2       |
+ * +-------+-------+-------+ +-------+-------+-------+ +-------+-------+-------+
+ * | Value | Value | Value | | Value | Value | Value | | Value | Value | Value |
+ * |   0   |  100  |  200  | |  300  |  400  |  500  | |  600  |  700  |  800  |
+ * +-------+-------+-------+ +-------+-------+-------+ +-------+-------+-------+
+ *     |       |       |_________|_______|_______|_________|___    |       |
+ *     |       |    _____________|_______|_______|_________|   |   |       |
+ *     |       |___|_____________|_      |      _|_____________|___|       |
+ *     |      _____|_____________| |     |     | |_____________|_____      |
+ *     |     |     |               |     |     |               |     |     |
+ *  +-----+-----+-----+         +-----+-----+-----+         +-----+-----+-----+
+ *  |  0  | 300 | 600 |         | 100 | 400 | 700 |         | 200 | 500 | 800 |
+ *  +-----+-----+-----+         +-----+-----+-----+         +-----+-----+-----+
+ *  |    Process 0    |         |    Process 1    |         |    Process 2    |
+ *  +-----------------+         +-----------------+         +-----------------+
+ **/
+
+// MPI_Alltoall(&my_values, 1, MPI_INT, buffer_recv, 1, MPI_INT, MPI_COMM_WORLD);
 
 int main(int argc, char **argv)
 {
 	process_command_line_options(argc, argv);
     printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n", 
         (int) n, C[0][0], C[0][1], C[1][0], C[1][1]);
-    
-    MPI_Init(NULL, NULL);
+
+    MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &C_size);
-
-    int root_rank = 0,
 
 	dict_setup(1.125 * (1ull << n));
 
 	/* search */
 	u64 k1[16], k2[16];
 	int nkey = golden_claw_search(16, k1, k2);
+    // if(rank = root_rank)
+    MPI_Finalize();
+    printf("nombre de clé trouvé %d \n", nkey);
 	assert(nkey > 0);
 
 	/* validation */
@@ -383,4 +747,6 @@ int main(int argc, char **argv)
     	assert(is_good_pair(k1[i], k2[i]));		
 	    printf("Solution found: (%" PRIx64 ", %" PRIx64 ") [checked OK]\n", k1[i], k2[i]);
 	}
+
+    return 0;
 }
