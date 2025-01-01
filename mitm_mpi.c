@@ -219,6 +219,7 @@ bool is_good_pair(u64 k1, u64 k2)
 
 /* search the "golden collision" */
 int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
+    int global_nres = 0;
     double start = wtime();
     u64 N = 1ull << n; //Cela correspond à 2^n
     // Buffers for Alltoallv
@@ -281,34 +282,39 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     }
 
 
-    
+    /*
     printf("Process %d: sendcounts = ", rank);
     for (int i = 0; i < size; ++i) {
         printf("%d ", sendcounts[i]);
     }
     printf("\n");
+    */
     
     // Alltoall to share send counts
     MPI_Alltoall(sendcounts, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
 
-    
+    /*
     printf("Process %d: recvcounts = ", rank);
     for (int i = 0; i < size; ++i) {
         printf("%d ", recvcounts[i]);
     }
     printf("\n\n");
+    */
     
     // Compute displacements for receive
     rdispls[0] = 0;
     for (int i = 1; i < size; ++i) {
         rdispls[i] = rdispls[i - 1] + recvcounts[i - 1];
     }
+
+    /*
     
     printf("Process %d: rdispls = ", rank);
     for (int i = 0; i < size; ++i) {
         printf("%d ", rdispls[i]);
     }
     printf("\n\n");
+    */
     
 
     // Vérification de la somme des envois et réceptions
@@ -337,6 +343,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         dict_insert(z, x);
         //printf("Clé : %d, Valeur : %ld\n",A[i].k,A[i].v);
     }
+    /*
     int count = 0;
     for (u64 z = rank; z < N; z += size) {
         count++;
@@ -346,6 +353,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     if (rank == 0) {
         printf("Total indices z processed: %d\n", total_count);
     }
+    */
 
     /*
     for (u64 i = 0; i < N; i++) {
@@ -353,13 +361,13 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     }
     */
 
-    
+    /*
     int non_empty = 0;
     for (u64 i = 0; i < dict_size; ++i) {
         if (A[i].k != EMPTY) non_empty++;
     }
     printf("Process %d: Dictionary contains %d entries\n", rank, non_empty);
-    
+    */
 
     /*
     for (u64 x = 0; x < 16; ++x) {
@@ -399,25 +407,68 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         ncandidates += nx;
         for (int i = 0; i < nx; ++i) {
             if (is_good_pair(results[i], y)) {
-                printf("Process %d: Good pair found: x=%" PRIu64 ", z=%" PRIu64 "\nnres = %d, maxres = %d", rank, results[i], z,nres,maxres);
+                //printf("Process %d: Good pair found: x=%" PRIu64 ", z=%" PRIu64 "\nnres = %d, maxres = %d", rank, results[i], z,nres,maxres);
+                
                 if (nres == maxres) {
-                    printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    
                     return -1;
                 }
                 k1[nres] = results[i];
                 k2[nres] = y;
-                printf("%ld %ld",k1[nres],k2[nres]);
+                //printf("%ld %ld",f(k1[nres]),g(k2[nres]));
                 if (rank == 0) {
                     printf("SOLUTION FOUND!\n");
                 }
                 nres += 1;
+                //printf("nres = %d",nres);
+
+                //MPI_Bcast(&nres, 1, MPI_INT, z%size, MPI_COMM_WORLD);
+                
+                
+                
             }
             else {
                 //printf("Process %d: Pair rejected: x=%lu, z=%lu\n", rank, results[i], z);
-}
             }
+            }
+        /*
+        // Partager le nres dès qu'une solution est trouvée
+        int global_nres = 0;
+        MPI_Allreduce(&nres, &global_nres, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
+        
+        // Si une solution est trouvée, propager le rang du premier
+        int global_found_rank = -1;
+        MPI_Allreduce(&found, &global_found_rank, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+
+        if (global_nres >= 1) {
+            nres = global_nres; // S'assurer que tous partagent le même nres
+            
+            if (rank == 0 && global_found_rank >= 0) {
+                printf("Solution found by process %d\n", global_found_rank);
+            }
+            
+            break; // Arrêter dès que nres >= 1
+        }
+        */
+        
+    
+            
     }
 
+    //MPI_Bcast(&nres, 1, MPI_INT, MPI_ANY_SOURCE, MPI_COMM_WORLD);
+
+    //printf("Process %d: Received nres = %d\n", rank, nres);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    // Réduction pour calculer le nombre total de solutions
+    int total_nres;
+    MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    //printf("%d",total_nres);
+    //compute sum of ncandidates
     u64 global_ncandidates = 0;
     MPI_Reduce(&ncandidates, &global_ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
     
@@ -427,8 +478,9 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", end - mid, global_ncandidates);
     }
 
-    return nres;
+     return total_nres;
 }
+
 
 /************************** command-line options ****************************/
 
@@ -517,10 +569,32 @@ int main(int argc, char **argv)
 	int nkey = golden_claw_search(16, k1, k2, rank, C_size);
 	assert(nkey > 0);
 
+    // Gather results from all processes
+    u64 global_k1[16 * C_size];
+    u64 global_k2[16 * C_size];
+
+    MPI_Gather(k1, 16, MPI_UINT64_T, global_k1, 16, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+    MPI_Gather(k2, 16, MPI_UINT64_T, global_k2, 16, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        for (int i = 0; i < 16 * C_size; i++) {
+            if (global_k1[i] != 0 || global_k2[i] != 0) { // Skip empty slots
+                assert(f(global_k1[i]) == g(global_k2[i]));
+                assert(is_good_pair(global_k1[i], global_k2[i]));
+                printf("Solution found: (%" PRIx64 ", %" PRIx64 ") [checked OK]\n", global_k1[i], global_k2[i]);
+            }
+        }
+    }
+
+    MPI_Finalize();
+
 	/* validation */
+    /*
 	for (int i = 0; i < nkey; i++) {
     	assert(f(k1[i]) == g(k2[i]));
     	assert(is_good_pair(k1[i], k2[i]));		
 	    printf("Solution found: (%" PRIx64 ", %" PRIx64 ") [checked OK]\n", k1[i], k2[i]);
 	}
+    */
+    
 }
