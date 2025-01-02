@@ -223,8 +223,8 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     double start = wtime();
     u64 N = 1ull << n; //Cela correspond à 2^n
     // Buffers for Alltoallv
-    u64 *sendbuf = malloc(2*N * sizeof(u64));
-    u64 *recvbuf = malloc(2*N * sizeof(u64));
+    u64 *sendbuf = malloc(32*N * sizeof(u64));
+    u64 *recvbuf = malloc(32*N * sizeof(u64));
     int *sendcounts = calloc(size, sizeof(int));
     int *recvcounts = calloc(size, sizeof(int));
     int *sdispls = calloc(size, sizeof(int));
@@ -407,15 +407,17 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         ncandidates += nx;
         for (int i = 0; i < nx; ++i) {
             if (is_good_pair(results[i], y)) {
-                //printf("Process %d: Good pair found: x=%" PRIu64 ", z=%" PRIu64 "\nnres = %d, maxres = %d", rank, results[i], z,nres,maxres);
+                printf("Process %d: Good pair found: x=%" PRIu64 ", z=%" PRIu64 "\nnres = %d, maxres = %d\n", rank, results[i], z,nres,maxres);
+                
                 
                 if (nres == maxres) {
                     
                     return -1;
                 }
+                
                 k1[nres] = results[i];
                 k2[nres] = y;
-                //printf("%ld %ld",f(k1[nres]),g(k2[nres]));
+                //printf("f() : %ld, g() : %ld\n",f(k1[nres]),g(k2[nres]));
                 if (rank == 0) {
                     printf("SOLUTION FOUND!\n");
                 }
@@ -459,13 +461,22 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
 
     //printf("Process %d: Received nres = %d\n", rank, nres);
 
+    /*
+    for(int i=0; i<16; i++){
+        printf("k1 = %ld, k2 = %ld\n",k1[i],k2[i]);
+    }
+    */
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    // Réduction pour calculer le nombre total de solutions
+    
+    int total_nres;
+    //MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Allreduce(&nres, &total_nres, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // Réduction pour calculer le nombre total de solutions
-    int total_nres;
-    MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    
-    MPI_Barrier(MPI_COMM_WORLD);
+    //printf("Process %d: Received nres = %d\n", rank, total_nres);
 
     //printf("%d",total_nres);
     //compute sum of ncandidates
@@ -478,7 +489,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", end - mid, global_ncandidates);
     }
 
-     return total_nres;
+    return total_nres;
 }
 
 
@@ -566,18 +577,30 @@ int main(int argc, char **argv)
 
 	/* search */
 	u64 k1[16], k2[16];
+    for(int i=0; i<16; i++){
+        k1[i]=0;
+        k2[i]=0;
+        //printf("k1 = %ld, k2 = %ld\n",k1[i],k2[i]);
+    }
 	int nkey = golden_claw_search(16, k1, k2, rank, C_size);
+    //printf("Process %d: Received nkey = %d\n", rank, nkey);
 	assert(nkey > 0);
 
     // Gather results from all processes
     u64 global_k1[16 * C_size];
     u64 global_k2[16 * C_size];
-
+    /*
+    for(int i=0; i<16; i++){
+        printf("k1 = %ld, k2 = %ld\n",k1[i],k2[i]);
+    }
+    */
     MPI_Gather(k1, 16, MPI_UINT64_T, global_k1, 16, MPI_UINT64_T, 0, MPI_COMM_WORLD);
     MPI_Gather(k2, 16, MPI_UINT64_T, global_k2, 16, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+    
 
     if (rank == 0) {
         for (int i = 0; i < 16 * C_size; i++) {
+            //printf("global_k1 = %ld, global_k2 = %ld\n",global_k1[i],global_k2[i]);
             if (global_k1[i] != 0 || global_k2[i] != 0) { // Skip empty slots
                 assert(f(global_k1[i]) == g(global_k2[i]));
                 assert(is_good_pair(global_k1[i], global_k2[i]));
