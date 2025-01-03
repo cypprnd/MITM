@@ -121,7 +121,7 @@ static const u64 PRIME = 0xfffffffb;
 /* allocate a hash table with `size` slots (12*size bytes) */
 void dict_setup(u64 size, int C_size, int rank)
 {
-	dict_size = size;
+	dict_size = size/C_size;
 	char hdsize[8];
 	human_format(dict_size * sizeof(*A), hdsize);
 	printf("Dictionary size: %sB\n", hdsize);
@@ -222,37 +222,44 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     int global_nres = 0;
     double start = wtime();
     u64 N = 1ull << n; //Cela correspond à 2^n
+
+    u64 chunk_size=N/size;
+    u64 start_idx = rank*chunk_size;
+    u64 end_idx=start_idx+chunk_size;
+    if(rank==size-1){
+        end_idx+=N%size;
+    }
+    u64 nb_idx=end_idx-start_idx;
     // Buffers for Alltoallv
-    u64 *sendbuf = malloc(32*N * sizeof(u64));
-    u64 *recvbuf = malloc(32*N * sizeof(u64));
+    u64 buffer_size = (2*N)/size;
+    u64 *sendbuf = malloc(buffer_size* sizeof(u64));
+    //u64 *recvbuf = malloc(2*N * sizeof(u64));
     int *sendcounts = calloc(size, sizeof(int));
     int *recvcounts = calloc(size, sizeof(int));
     int *sdispls = calloc(size, sizeof(int));
     int *rdispls = calloc(size, sizeof(int));
 
-
-    if (sendbuf == NULL || recvbuf == NULL) {
+    
+    if (sendbuf == NULL ) { //|| recvbuf == NULL
         fprintf(stderr, "Memory allocation failed\n");
         MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
     }
+    
     // Fill dictionary using Alltoallv
     for (u64 x = rank; x < N; x+=size) {
         u64 z = f(x);
         int shard = z % size;
         //printf("shard : %d",shard);
         //printf("rank : %d , indice z : %ld ", rank,(N/2*shard)+sendcounts[shard]);
-        sendbuf[+sendcounts[shard]++] = z; // Pack z and x
+        sendbuf[sendcounts[shard]++] = z; // Pack z and x
         //printf("indice x : %ld ", (N/2*shard)+sendcounts[shard]);
-        sendbuf[(N/2*shard)+sendcounts[shard]++] = x;
+        sendbuf[sendcounts[shard]++] = x;
         //printf("z=%ld, x=%ld\n", z,x);
     
     }
 
-    /*
-    for (u64 i = 0; i < N; i=i+2) {
-        printf("Clé : %ld, Valeur : %ld\n",sendbuf[i],sendbuf[i+1]);
-    }
-    */
+    
+    
 
     // Compute displacements for send
     sdispls[0] = 0;
@@ -266,6 +273,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     }
     printf("\n");
     */
+    
 
     memset(sendcounts, 0, size * sizeof(int));
     for (u64 x = rank; x < N; x+=size) {
@@ -273,6 +281,15 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         int shard = z % size;
         //printf("shard : %d %d ",shard,sdispls[shard]);
         int index = sdispls[shard] + sendcounts[shard];
+        if (index>=(2*N)/size){
+            
+            sendbuf = (u64 *)realloc(sendbuf, (2+(2*N)/size)* sizeof(u64));
+            if (sendbuf == NULL ) { //|| recvbuf == NULL
+                fprintf(stderr, "Memory allocation failed\n");
+                MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
+            }
+            //printf("rank : %d, index : %d",rank,index);
+        }
         //printf("rank : %d , index : %d ", rank,index);
         sendbuf[index] = z;     // Stocker z
         sendbuf[index + 1] = x; // Stocker x
@@ -282,13 +299,27 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     }
 
 
-    /*
+    /*    
     printf("Process %d: sendcounts = ", rank);
     for (int i = 0; i < size; ++i) {
         printf("%d ", sendcounts[i]);
     }
     printf("\n");
     */
+    
+   /*
+    for (u64 i = 0; i < N; i=i+2) {
+        printf("Clé : %ld, Valeur : %ld\n",sendbuf[i],sendbuf[i+1]);
+    }
+    */
+    /*
+    printf("send rank = %d | ",rank);
+    for (int i = 0; i < buffer_size; ++i) {
+        printf("%ld ", sendbuf[i]);
+    }
+    printf("\n");
+    */
+    
     
     // Alltoall to share send counts
     MPI_Alltoall(sendcounts, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
@@ -307,8 +338,8 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         rdispls[i] = rdispls[i - 1] + recvcounts[i - 1];
     }
 
-    /*
     
+    /*
     printf("Process %d: rdispls = ", rank);
     for (int i = 0; i < size; ++i) {
         printf("%d ", rdispls[i]);
@@ -324,6 +355,11 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         total_send += sendcounts[i];
         total_recv += recvcounts[i];
     }
+    u64 *recvbuf = malloc(total_recv * sizeof(u64));
+    if (recvbuf == NULL ) { //|| recvbuf == NULL
+        fprintf(stderr, "Memory allocation failed\n");
+        MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
+    }
     
     //printf("%d %d\n",total_send,total_recv);
 
@@ -333,8 +369,13 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     // Perform Alltoallv to distribute data
     MPI_Alltoallv(sendbuf, sendcounts, sdispls, MPI_UINT64_T,
                   recvbuf, recvcounts, rdispls, MPI_UINT64_T, MPI_COMM_WORLD);
-
-
+    /*
+    printf("recv rank = %d |",rank);
+    for (int i = 0; i < total_recv ; ++i) {
+        printf("%ld ", recvbuf[i]);
+    }
+    printf("\n");
+    */
 
     for (int i = 0; i < rdispls[size - 1] + recvcounts[size - 1]; i += 2) {
         u64 z = recvbuf[i];
@@ -354,7 +395,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         printf("Total indices z processed: %d\n", total_count);
     }
     */
-
+    
     /*
     for (u64 i = 0; i < N; i++) {
         printf("Clé : %d, Valeur : %ld\n",A[i].k,A[i].v);
