@@ -11,6 +11,7 @@
 
 
 #include <mpi.h>
+#include <omp.h>
 
 typedef uint64_t u64;       /* portable 64-bit integer */
 typedef uint32_t u32;       /* portable 32-bit integer */
@@ -223,13 +224,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     double start = wtime();
     u64 N = 1ull << n; //Cela correspond à 2^n
 
-    u64 chunk_size=N/size;
-    u64 start_idx = rank*chunk_size;
-    u64 end_idx=start_idx+chunk_size;
-    if(rank==size-1){
-        end_idx+=N%size;
-    }
-    u64 nb_idx=end_idx-start_idx;
+    
     // Buffers for Alltoallv
     u64 buffer_size = (2*N)/size;
     u64 *sendbuf = malloc(buffer_size* sizeof(u64));
@@ -437,10 +432,13 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     u64 ncandidates = 0;
     u64 results[256];
 
-    // Search for solutions
-;
+    
+    
+    
     for (u64 y = 0; y < N; y ++) { // Distribute work among ranks
         u64 z = g(y);
+        int shard=z%size;
+        if (rank==shard){
         //printf("z=%ld, y=%ld\n", z,y);
         int nx = dict_probe(z, 256, results);
         //printf("Process %d: Searching y=%" PRIu64 ", found %d matches\n", rank, y, nx);
@@ -456,18 +454,19 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
                     return -1;
                 }
                 
+                
                 k1[nres] = results[i];
                 k2[nres] = y;
                 //printf("f() : %ld, g() : %ld\n",f(k1[nres]),g(k2[nres]));
-                if (rank == 0) {
-                    printf("SOLUTION FOUND!\n");
-                }
+                
+                printf("SOLUTION FOUND!\n");
+                
                 nres += 1;
                 //printf("nres = %d",nres);
 
                 //MPI_Bcast(&nres, 1, MPI_INT, z%size, MPI_COMM_WORLD);
                 
-                
+            
                 
             }
             else {
@@ -493,7 +492,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
             break; // Arrêter dès que nres >= 1
         }
         */
-        
+        }
     
             
     }
@@ -521,6 +520,8 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
 
     //printf("%d",total_nres);
     //compute sum of ncandidates
+
+    //printf("Process %d: ncandidates %ld entries\n", rank, ncandidates);
     u64 global_ncandidates = 0;
     MPI_Reduce(&ncandidates, &global_ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
     
