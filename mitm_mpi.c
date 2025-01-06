@@ -416,29 +416,122 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     }
     */
 
-    free(sendbuf);
+    //free(sendbuf);
     free(recvbuf);
-    free(sendcounts);
-    free(recvcounts);
-    free(sdispls);
-    free(rdispls);
+    //free(sendcounts);
+    //free(recvcounts);
+    //free(sdispls);
+    //free(rdispls);
 
     double mid = wtime();
     if (rank == 0) {
         printf("Fill: %.1fs\n", mid - start);
     }
+    
+    memset(sendcounts, 0, size * sizeof(int));
+    memset(sdispls, 0, size * sizeof(int));
+    memset(recvcounts, 0, size * sizeof(int));
+    memset(rdispls, 0, size * sizeof(int));
+    //memset(sendbuf, 0, size* buffer_size* sizeof(u64));
+
+    for (u64 x = rank; x < N; x+=size) {
+        u64 z = g(x);
+        int shard = z % size;
+        //printf("shard : %d",shard);
+        //printf("rank : %d , indice z : %ld ", rank,(N/2*shard)+sendcounts[shard]);
+        sendbuf[sendcounts[shard]++] = z; // Pack z and x
+        //printf("indice x : %ld ", (N/2*shard)+sendcounts[shard]);
+        sendbuf[sendcounts[shard]++] = x;
+        //printf("z=%ld, x=%ld\n", z,x);
+    
+    }
+
+    
+    
+
+    // Compute displacements for send
+    sdispls[0] = 0;
+    for (int i = 1; i < size; ++i) {
+        sdispls[i] = sdispls[i - 1] + sendcounts[i - 1];
+    }
+    
+    memset(sendcounts, 0, size * sizeof(int));
+    for (u64 x = rank; x < N; x+=size) {
+        u64 z = g(x);
+        int shard = z % size;
+        //printf("shard : %d %d ",shard,sdispls[shard]);
+        int index = sdispls[shard] + sendcounts[shard];
+        if (index>=(2*N)/size){
+            
+            sendbuf = (u64 *)realloc(sendbuf, (2+(2*N)/size)* sizeof(u64));
+            if (sendbuf == NULL ) { //|| recvbuf == NULL
+                fprintf(stderr, "Memory allocation failed\n");
+                MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
+            }
+            //printf("rank : %d, index : %d",rank,index);
+        }
+        //printf("rank : %d , index : %d ", rank,index);
+        sendbuf[index] = z;     // Stocker z
+        sendbuf[index + 1] = x; // Stocker x
+        //printf("z=%ld, x=%ld\n", z,x);
+        sendcounts[shard]+=2;
+    
+    }
+
+
+    
+    
+    // Alltoall to share send counts
+    MPI_Alltoall(sendcounts, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
+
+   
+    
+    // Compute displacements for receive
+    rdispls[0] = 0;
+    for (int i = 1; i < size; ++i) {
+        rdispls[i] = rdispls[i - 1] + recvcounts[i - 1];
+    }
+
+    
+   
+    
+
+    // Vérification de la somme des envois et réceptions
+    total_send = 0;
+    total_recv = 0;
+    for (int i = 0; i < size; ++i) {
+        total_send += sendcounts[i];
+        total_recv += recvcounts[i];
+    }
+    recvbuf = malloc(total_recv * sizeof(u64));
+    if (recvbuf == NULL ) { //|| recvbuf == NULL
+        fprintf(stderr, "Memory allocation failed\n");
+        MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
+    }
+    
+
+
+    // Perform Alltoallv to distribute data
+    MPI_Alltoallv(sendbuf, sendcounts, sdispls, MPI_UINT64_T,
+                  recvbuf, recvcounts, rdispls, MPI_UINT64_T, MPI_COMM_WORLD);
+
+    
 
     int nres = 0;
     u64 ncandidates = 0;
     u64 results[256];
 
     
+
+   
+
+
+
+   
     
-    
-    for (u64 y = 0; y < N; y ++) { // Distribute work among ranks
-        u64 z = g(y);
-        int shard=z%size;
-        if (rank==shard){
+    for (u64 i = 0; i< rdispls[size - 1] + recvcounts[size - 1]; i ++) { // Distribute work among ranks
+        u64 z = recvbuf[i];
+        u64 y = recvbuf[i+1];
         //printf("z=%ld, y=%ld\n", z,y);
         int nx = dict_probe(z, 256, results);
         //printf("Process %d: Searching y=%" PRIu64 ", found %d matches\n", rank, y, nx);
@@ -492,10 +585,11 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
             break; // Arrêter dès que nres >= 1
         }
         */
-        }
+        
     
             
     }
+    
 
     //MPI_Bcast(&nres, 1, MPI_INT, MPI_ANY_SOURCE, MPI_COMM_WORLD);
 
@@ -514,7 +608,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     int total_nres;
     //MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Allreduce(&nres, &total_nres, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-    MPI_Barrier(MPI_COMM_WORLD);
+    //MPI_Barrier(MPI_COMM_WORLD);
 
     //printf("Process %d: Received nres = %d\n", rank, total_nres);
 
