@@ -2,7 +2,7 @@
 EXEC = mitm_mpi
 
 # Nom du fichier source
-SRC = mitm_mpi_Cyprien_Renaud_Francis_Jegou.c
+SRC = mitm_mpi_version_propre.c
 
 # Compilateur
 CC = mpicc
