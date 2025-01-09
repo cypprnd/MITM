@@ -220,7 +220,7 @@ bool is_good_pair(u64 k1, u64 k2)
 
 /* search the "golden collision" */
 int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
-
+    int global_nres = 0;
     double start = wtime();
     u64 N = 1ull << n; //Cela correspond à 2^n
 
@@ -547,9 +547,11 @@ int main(int argc, char **argv)
     int C_size;
     MPI_Comm_size(MPI_COMM_WORLD, &C_size);
 
-    dict_setup(1.125 * (1ull << n), C_size, rank);
+    int root_rank = 0;
 
-    /* search */
+	dict_setup(1.125 * (1ull << n), C_size, rank);
+
+	/* search */
     // Step 5 : Fusion des résultats
 	u64 k1[16], k2[16];
     for(int i=0; i<16; i++){
