@@ -122,7 +122,7 @@ static const u64 PRIME = 0xfffffffb;
 /* allocate a hash table with `size` slots (12*size bytes) */
 void dict_setup(u64 size, int C_size, int rank)
 {
-	dict_size = size/C_size;
+	dict_size = size/C_size; //On alloue 2^N/nombre de processeurs
 	char hdsize[8];
 	human_format(dict_size * sizeof(*A), hdsize);
 	printf("Dictionary size: %sB\n", hdsize);
@@ -220,236 +220,116 @@ bool is_good_pair(u64 k1, u64 k2)
 
 /* search the "golden collision" */
 int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
-    int global_nres = 0;
     double start = wtime();
     u64 N = 1ull << n; //Cela correspond à 2^n
 
-    
-    // Buffers for Alltoallv
+    // Step 1 : Alloctaions des buffers pour Alltoallv
     u64 buffer_size = (2*N)/size;
     u64 *sendbuf = malloc(buffer_size* sizeof(u64));
-    //u64 *recvbuf = malloc(2*N * sizeof(u64));
     int *sendcounts = calloc(size, sizeof(int));
     int *recvcounts = calloc(size, sizeof(int));
     int *sdispls = calloc(size, sizeof(int));
     int *rdispls = calloc(size, sizeof(int));
 
-    
     if (sendbuf == NULL ) { //|| recvbuf == NULL
         fprintf(stderr, "Memory allocation failed\n");
         MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
     }
     
-    // Fill dictionary using Alltoallv
+    // Step 2 : Remplissage des dictionnaires
+    // Step 2.1 : Calcul de sendcounts pour calculer sdispls
     for (u64 x = rank; x < N; x+=size) {
         u64 z = f(x);
         int shard = z % size;
-        //printf("shard : %d",shard);
-        //printf("rank : %d , indice z : %ld ", rank,(N/2*shard)+sendcounts[shard]);
-        sendbuf[sendcounts[shard]++] = z; // Pack z and x
-        //printf("indice x : %ld ", (N/2*shard)+sendcounts[shard]);
+        sendbuf[sendcounts[shard]++] = z; 
         sendbuf[sendcounts[shard]++] = x;
-        //printf("z=%ld, x=%ld\n", z,x);
-    
+       
     }
 
-    
-    
-
-    // Compute displacements for send
+    // Step 2.2 : Calcul de sdispls
     sdispls[0] = 0;
     for (int i = 1; i < size; ++i) {
         sdispls[i] = sdispls[i - 1] + sendcounts[i - 1];
     }
-    /*
-    printf("Process %d: sdispls = ", rank);
-    for (int i = 0; i < size; ++i) {
-        printf("%d ", sdispls[i]);
-    }
-    printf("\n");
-    */
-    
-
+   
+    // Step 2.3 : Remplissage de sendbuf
     memset(sendcounts, 0, size * sizeof(int));
     for (u64 x = rank; x < N; x+=size) {
         u64 z = f(x);
         int shard = z % size;
-        //printf("shard : %d %d ",shard,sdispls[shard]);
         int index = sdispls[shard] + sendcounts[shard];
         if (index>=(2*N)/size){
-            
-            sendbuf = (u64 *)realloc(sendbuf, (2+(2*N)/size)* sizeof(u64));
-            if (sendbuf == NULL ) { //|| recvbuf == NULL
+            // Si lbuffer_size n'est pas suffisant on alloue de la mémoire supplémentaire
+            sendbuf = (u64 *)realloc(sendbuf, (2+buffer_size)* sizeof(u64));
+            if (sendbuf == NULL ) { 
                 fprintf(stderr, "Memory allocation failed\n");
-                MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
+                MPI_Abort(MPI_COMM_WORLD, 1);
             }
-            //printf("rank : %d, index : %d",rank,index);
         }
-        //printf("rank : %d , index : %d ", rank,index);
         sendbuf[index] = z;     // Stocker z
         sendbuf[index + 1] = x; // Stocker x
-        //printf("z=%ld, x=%ld\n", z,x);
+       
         sendcounts[shard]+=2;
-    
     }
 
-
-    /*    
-    printf("Process %d: sendcounts = ", rank);
-    for (int i = 0; i < size; ++i) {
-        printf("%d ", sendcounts[i]);
-    }
-    printf("\n");
-    */
-    
-   /*
-    for (u64 i = 0; i < N; i=i+2) {
-        printf("Clé : %ld, Valeur : %ld\n",sendbuf[i],sendbuf[i+1]);
-    }
-    */
-    /*
-    printf("send rank = %d | ",rank);
-    for (int i = 0; i < buffer_size; ++i) {
-        printf("%ld ", sendbuf[i]);
-    }
-    printf("\n");
-    */
-    
-    
-    // Alltoall to share send counts
+    // Step 2.4 : Envoi de sendcounts pour recvcounts
     MPI_Alltoall(sendcounts, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
-
-    /*
-    printf("Process %d: recvcounts = ", rank);
-    for (int i = 0; i < size; ++i) {
-        printf("%d ", recvcounts[i]);
-    }
-    printf("\n\n");
-    */
     
-    // Compute displacements for receive
+    // Step 2.5 : Calcul de rdisplsCompute displacements for receive
     rdispls[0] = 0;
     for (int i = 1; i < size; ++i) {
         rdispls[i] = rdispls[i - 1] + recvcounts[i - 1];
     }
 
-    
-    /*
-    printf("Process %d: rdispls = ", rank);
-    for (int i = 0; i < size; ++i) {
-        printf("%d ", rdispls[i]);
-    }
-    printf("\n\n");
-    */
-    
-
-    // Vérification de la somme des envois et réceptions
+    // Step 2.6 : Calcul du total reçu pour allouer laplace mémore de recvbuf
     int total_send = 0;
     int total_recv = 0;
     for (int i = 0; i < size; ++i) {
         total_send += sendcounts[i];
         total_recv += recvcounts[i];
     }
+
+    // Step 2.7 : Allocation de recvbuf
     u64 *recvbuf = malloc(total_recv * sizeof(u64));
     if (recvbuf == NULL ) { //|| recvbuf == NULL
         fprintf(stderr, "Memory allocation failed\n");
         MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
     }
-    
-    //printf("%d %d\n",total_send,total_recv);
-
-    //assert(total_send == total_recv);
-
-
-    // Perform Alltoallv to distribute data
+   
+    // Step 2.8 : Lancer AlltoAllv pour distribuer les données
     MPI_Alltoallv(sendbuf, sendcounts, sdispls, MPI_UINT64_T,
                   recvbuf, recvcounts, rdispls, MPI_UINT64_T, MPI_COMM_WORLD);
-    /*
-    printf("recv rank = %d |",rank);
-    for (int i = 0; i < total_recv ; ++i) {
-        printf("%ld ", recvbuf[i]);
-    }
-    printf("\n");
-    */
 
+    // Step 2.9 : Remplissage des dictionnaires
     for (int i = 0; i < rdispls[size - 1] + recvcounts[size - 1]; i += 2) {
         u64 z = recvbuf[i];
         u64 x = recvbuf[i + 1];
-        //printf("Process %d: Inserting (z=%" PRIu64 ", x=%" PRIu64 ")\n", rank, z, x);
         dict_insert(z, x);
-        //printf("Clé : %d, Valeur : %ld\n",A[i].k,A[i].v);
     }
-    /*
-    int count = 0;
-    for (u64 z = rank; z < N; z += size) {
-        count++;
-    }
-    int total_count;
-    MPI_Reduce(&count, &total_count, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    if (rank == 0) {
-        printf("Total indices z processed: %d\n", total_count);
-    }
-    */
     
-    /*
-    for (u64 i = 0; i < N; i++) {
-        printf("Clé : %d, Valeur : %ld\n",A[i].k,A[i].v);
-    }
-    */
-
-    /*
-    int non_empty = 0;
-    for (u64 i = 0; i < dict_size; ++i) {
-        if (A[i].k != EMPTY) non_empty++;
-    }
-    printf("Process %d: Dictionary contains %d entries\n", rank, non_empty);
-    */
-
-    /*
-    for (u64 x = 0; x < 16; ++x) {
-    u64 z = f(x);
-    printf("Process %d: f(%lu) = %lu\n", rank, x, z);
-    }
-    for (u64 z = 0; z < 16; ++z) {
-        u64 y = g(z);
-        printf("Process %d: g(%lu) = %lu\n", rank, z, y);
-    }
-    */
-
-    //free(sendbuf);
+    // Step 2.10 : Libération de la mémoire
     free(recvbuf);
-    //free(sendcounts);
-    //free(recvcounts);
-    //free(sdispls);
-    //free(rdispls);
 
     double mid = wtime();
     if (rank == 0) {
         printf("Fill: %.1fs\n", mid - start);
     }
-    
+
+    // Step 3 : Recherche des solutions, on refait la méthode de distribution des données
+    // Step 3.1 : Remise des buffers à 0
     memset(sendcounts, 0, size * sizeof(int));
     memset(sdispls, 0, size * sizeof(int));
     memset(recvcounts, 0, size * sizeof(int));
     memset(rdispls, 0, size * sizeof(int));
-    //memset(sendbuf, 0, size* buffer_size* sizeof(u64));
-
+  
+    //Step 3.2 : On refait la méthode de distribution des données
     for (u64 x = rank; x < N; x+=size) {
         u64 z = g(x);
         int shard = z % size;
-        //printf("shard : %d",shard);
-        //printf("rank : %d , indice z : %ld ", rank,(N/2*shard)+sendcounts[shard]);
         sendbuf[sendcounts[shard]++] = z; // Pack z and x
-        //printf("indice x : %ld ", (N/2*shard)+sendcounts[shard]);
         sendbuf[sendcounts[shard]++] = x;
-        //printf("z=%ld, x=%ld\n", z,x);
-    
     }
-
     
-    
-
-    // Compute displacements for send
     sdispls[0] = 0;
     for (int i = 1; i < size; ++i) {
         sdispls[i] = sdispls[i - 1] + sendcounts[i - 1];
@@ -459,44 +339,27 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
     for (u64 x = rank; x < N; x+=size) {
         u64 z = g(x);
         int shard = z % size;
-        //printf("shard : %d %d ",shard,sdispls[shard]);
         int index = sdispls[shard] + sendcounts[shard];
         if (index>=(2*N)/size){
-            
             sendbuf = (u64 *)realloc(sendbuf, (2+(2*N)/size)* sizeof(u64));
-            if (sendbuf == NULL ) { //|| recvbuf == NULL
+            if (sendbuf == NULL ) { 
                 fprintf(stderr, "Memory allocation failed\n");
-                MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
+                MPI_Abort(MPI_COMM_WORLD, 1); 
             }
-            //printf("rank : %d, index : %d",rank,index);
         }
-        //printf("rank : %d , index : %d ", rank,index);
         sendbuf[index] = z;     // Stocker z
         sendbuf[index + 1] = x; // Stocker x
-        //printf("z=%ld, x=%ld\n", z,x);
-        sendcounts[shard]+=2;
-    
+        
+        sendcounts[shard]+=2;    
     }
 
-
-    
-    
-    // Alltoall to share send counts
     MPI_Alltoall(sendcounts, 1, MPI_INT, recvcounts, 1, MPI_INT, MPI_COMM_WORLD);
 
-   
-    
-    // Compute displacements for receive
     rdispls[0] = 0;
     for (int i = 1; i < size; ++i) {
         rdispls[i] = rdispls[i - 1] + recvcounts[i - 1];
     }
 
-    
-   
-    
-
-    // Vérification de la somme des envois et réceptions
     total_send = 0;
     total_recv = 0;
     for (int i = 0; i < size; ++i) {
@@ -504,118 +367,51 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int rank, int size) {
         total_recv += recvcounts[i];
     }
     recvbuf = malloc(total_recv * sizeof(u64));
-    if (recvbuf == NULL ) { //|| recvbuf == NULL
+    if (recvbuf == NULL ) { 
         fprintf(stderr, "Memory allocation failed\n");
         MPI_Abort(MPI_COMM_WORLD, 1); // Terminer si l'allocation échoue
     }
     
-
-
-    // Perform Alltoallv to distribute data
     MPI_Alltoallv(sendbuf, sendcounts, sdispls, MPI_UINT64_T,
                   recvbuf, recvcounts, rdispls, MPI_UINT64_T, MPI_COMM_WORLD);
-
-    
 
     int nres = 0;
     u64 ncandidates = 0;
     u64 results[256];
 
-    
-
-   
-
-
-
-   
-    
-    for (u64 i = 0; i< rdispls[size - 1] + recvcounts[size - 1]; i ++) { // Distribute work among ranks
+    // Step 3.3 : Recherche des solutions
+    for (u64 i = 0; i< rdispls[size - 1] + recvcounts[size - 1]; i ++) { 
         u64 z = recvbuf[i];
         u64 y = recvbuf[i+1];
-        //printf("z=%ld, y=%ld\n", z,y);
+        
         int nx = dict_probe(z, 256, results);
-        //printf("Process %d: Searching y=%" PRIu64 ", found %d matches\n", rank, y, nx);
+     
         assert(nx >= 0);
         ncandidates += nx;
         for (int i = 0; i < nx; ++i) {
             if (is_good_pair(results[i], y)) {
                 printf("Process %d: Good pair found: x=%" PRIu64 ", z=%" PRIu64 "\nnres = %d, maxres = %d\n", rank, results[i], z,nres,maxres);
                 
-                
-                if (nres == maxres) {
-                    
+                if (nres == maxres) {    
                     return -1;
                 }
                 
-                
                 k1[nres] = results[i];
                 k2[nres] = y;
-                //printf("f() : %ld, g() : %ld\n",f(k1[nres]),g(k2[nres]));
                 
                 printf("SOLUTION FOUND!\n");
-                
                 nres += 1;
-                //printf("nres = %d",nres);
-
-                //MPI_Bcast(&nres, 1, MPI_INT, z%size, MPI_COMM_WORLD);
-                
-            
-                
-            }
-            else {
-                //printf("Process %d: Pair rejected: x=%lu, z=%lu\n", rank, results[i], z);
-            }
-            }
-        /*
-        // Partager le nres dès qu'une solution est trouvée
-        int global_nres = 0;
-        MPI_Allreduce(&nres, &global_nres, 1, MPI_INT, MPI_LOR, MPI_COMM_WORLD);
-        
-        // Si une solution est trouvée, propager le rang du premier
-        int global_found_rank = -1;
-        MPI_Allreduce(&found, &global_found_rank, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-
-        if (global_nres >= 1) {
-            nres = global_nres; // S'assurer que tous partagent le même nres
-            
-            if (rank == 0 && global_found_rank >= 0) {
-                printf("Solution found by process %d\n", global_found_rank);
-            }
-            
-            break; // Arrêter dès que nres >= 1
-        }
-        */
-        
-    
-            
+            }   
+        }       
     }
     
-
-    //MPI_Bcast(&nres, 1, MPI_INT, MPI_ANY_SOURCE, MPI_COMM_WORLD);
-
-    //printf("Process %d: Received nres = %d\n", rank, nres);
-
-    /*
-    for(int i=0; i<16; i++){
-        printf("k1 = %ld, k2 = %ld\n",k1[i],k2[i]);
-    }
-    */
-
-    MPI_Barrier(MPI_COMM_WORLD);
-    
-    // Réduction pour calculer le nombre total de solutions
+    // Step 4 : Calcul du nombre total de candidats
+    MPI_Barrier(MPI_COMM_WORLD);    
     
     int total_nres;
-    //MPI_Reduce(&nres, &total_nres, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    
     MPI_Allreduce(&nres, &total_nres, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-    //MPI_Barrier(MPI_COMM_WORLD);
-
-    //printf("Process %d: Received nres = %d\n", rank, total_nres);
-
-    //printf("%d",total_nres);
-    //compute sum of ncandidates
-
-    //printf("Process %d: ncandidates %ld entries\n", rank, ncandidates);
+    
     u64 global_ncandidates = 0;
     MPI_Reduce(&ncandidates, &global_ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
     
@@ -683,19 +479,9 @@ void process_command_line_options(int argc, char ** argv)
 
 /******************************************************************************/
 
-/*
- * Liste des tags
- * tag = 0 => Envoie du dictionnaire vide dans chaque processus
- * tag = 1 => Envoie de x au processus n°shard
- * tag = 2 => Envoie de z au processus n°shard
- * tag = 3 => Envoie de y au processus n°shard
- * tag = 4 => Envoie de w au processis n°shard
- * tag = 5 =>
- */
-
 int main(int argc, char **argv)
 {
-	process_command_line_options(argc, argv);
+    process_command_line_options(argc, argv);
     printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n", 
         (int) n, C[0][0], C[0][1], C[1][0], C[1][1]);
     
@@ -707,33 +493,27 @@ int main(int argc, char **argv)
     int C_size;
     MPI_Comm_size(MPI_COMM_WORLD, &C_size);
 
-    int root_rank = 0;
+    dict_setup(1.125 * (1ull << n), C_size, rank);
 
-	dict_setup(1.125 * (1ull << n), C_size, rank);
-
-	/* search */
+    /* search */
+    // Step 5 : Fusion des résultats
 	u64 k1[16], k2[16];
     for(int i=0; i<16; i++){
         k1[i]=0;
         k2[i]=0;
-        //printf("k1 = %ld, k2 = %ld\n",k1[i],k2[i]);
     }
-	int nkey = golden_claw_search(16, k1, k2, rank, C_size);
-    //printf("Process %d: Received nkey = %d\n", rank, nkey);
-	assert(nkey > 0);
 
-    // Gather results from all processes
+    int nkey = golden_claw_search(16, k1, k2, rank, C_size);
+    assert(nkey > 0);
+
     u64 global_k1[16 * C_size];
     u64 global_k2[16 * C_size];
-    /*
-    for(int i=0; i<16; i++){
-        printf("k1 = %ld, k2 = %ld\n",k1[i],k2[i]);
-    }
-    */
+    
     MPI_Gather(k1, 16, MPI_UINT64_T, global_k1, 16, MPI_UINT64_T, 0, MPI_COMM_WORLD);
     MPI_Gather(k2, 16, MPI_UINT64_T, global_k2, 16, MPI_UINT64_T, 0, MPI_COMM_WORLD);
     
-
+    /* validation */
+    // Step 6 : Validation des résultats
     if (rank == 0) {
         for (int i = 0; i < 16 * C_size; i++) {
             //printf("global_k1 = %ld, global_k2 = %ld\n",global_k1[i],global_k2[i]);
@@ -746,15 +526,4 @@ int main(int argc, char **argv)
     }
 
     MPI_Finalize();
-    
-
-	/* validation */
-    /*
-	for (int i = 0; i < nkey; i++) {
-    	assert(f(k1[i]) == g(k2[i]));
-    	assert(is_good_pair(k1[i], k2[i]));		
-	    printf("Solution found: (%" PRIx64 ", %" PRIx64 ") [checked OK]\n", k1[i], k2[i]);
-	}
-    */
-    
 }
